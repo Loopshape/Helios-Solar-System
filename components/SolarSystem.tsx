@@ -26,14 +26,14 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     // --- Scene Setup ---
     const scene = new THREE.Scene();
     sceneRef.current = scene;
-    scene.background = new THREE.Color(0x050510);
+    scene.background = new THREE.Color(0x020205); // Very dark blue-black
     // Fog for depth
-    scene.fog = new THREE.FogExp2(0x050510, 0.002);
+    scene.fog = new THREE.FogExp2(0x020205, 0.0015);
 
     // --- Camera ---
     const width = mountRef.current.clientWidth;
     const height = mountRef.current.clientHeight;
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000); // Increased far plane
     cameraRef.current = camera;
     camera.position.set(0, 60, 120);
 
@@ -52,7 +52,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = 5;
-    controls.maxDistance = 200;
+    controls.maxDistance = 400; // Allow zooming out further to see galaxy
     controlsRef.current = controls;
 
     controls.addEventListener('start', () => { isInteractingRef.current = true; });
@@ -67,7 +67,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
 
     // 2. Ambient Light
     // Low intensity base light to prevent pitch black shadows
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.1); 
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.05); 
     scene.add(ambientLight);
 
     // 3. Hemisphere Light
@@ -87,23 +87,147 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     dirLightFill.position.set(-100, -50, -100);
     scene.add(dirLightFill);
 
-    // --- Starfield Background ---
-    const starGeometry = new THREE.BufferGeometry();
-    const starCount = 5000;
-    const starPositions = new Float32Array(starCount * 3);
-    for(let i = 0; i < starCount * 3; i++) {
-        starPositions[i] = (Math.random() - 0.5) * 600;
-    }
-    starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
-    const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.2, transparent: true, opacity: 0.8 });
-    const stars = new THREE.Points(starGeometry, starMaterial);
-    scene.add(stars);
+    // --- Helper: Create Particle Texture ---
+    const createParticleTexture = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        
+        const grad = ctx.createRadialGradient(16,16,0, 16,16,16);
+        grad.addColorStop(0, "rgba(255,255,255,1)");
+        grad.addColorStop(0.2, "rgba(255,255,255,0.8)");
+        grad.addColorStop(0.5, "rgba(255,255,255,0.2)");
+        grad.addColorStop(1, "rgba(0,0,0,0)");
+        
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0,32,32);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        return texture;
+    };
 
+    const particleTexture = createParticleTexture();
+
+    // --- Background 1: Distant Stars ---
+    const starGeo = new THREE.BufferGeometry();
+    const starCount = 6000;
+    const starPos = new Float32Array(starCount * 3);
+    const starColors = new Float32Array(starCount * 3);
+    const starSizes = new Float32Array(starCount);
+
+    for(let i=0; i<starCount; i++) {
+        const i3 = i * 3;
+        // Distribute in a large sphere
+        const r = 500 + Math.random() * 1000; 
+        const theta = 2 * Math.PI * Math.random();
+        const phi = Math.acos(2 * Math.random() - 1);
+        
+        starPos[i3] = r * Math.sin(phi) * Math.cos(theta);
+        starPos[i3+1] = r * Math.sin(phi) * Math.sin(theta);
+        starPos[i3+2] = r * Math.cos(phi);
+
+        // Color variation
+        const colorType = Math.random();
+        let color = new THREE.Color();
+        if (colorType > 0.9) color.setHex(0xaaaaaa); // White
+        else if (colorType > 0.7) color.setHex(0xffdddd); // Red
+        else if (colorType > 0.5) color.setHex(0xccccff); // Blue
+        else color.setHex(0xffffff);
+
+        starColors[i3] = color.r;
+        starColors[i3+1] = color.g;
+        starColors[i3+2] = color.b;
+
+        starSizes[i] = Math.random() * 2;
+    }
+
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+    starGeo.setAttribute('size', new THREE.BufferAttribute(starSizes, 1));
+
+    const starMat = new THREE.PointsMaterial({
+        size: 1,
+        vertexColors: true,
+        map: particleTexture || undefined,
+        transparent: true,
+        opacity: 0.8,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    
+    const starField = new THREE.Points(starGeo, starMat);
+    scene.add(starField);
+
+    // --- Background 2: Galaxy Spiral ---
+    const galaxyGeo = new THREE.BufferGeometry();
+    const galaxyCount = 15000;
+    const galaxyRadius = 400;
+    const branches = 5;
+    const spin = 1.5; // How much it twists
+    const randomness = 0.5;
+    const randomnessPower = 3;
+    const insideColor = new THREE.Color(0xff6030); // Orange/Red core
+    const outsideColor = new THREE.Color(0x1b3984); // Blue outer arms
+
+    const galaxyPos = new Float32Array(galaxyCount * 3);
+    const galaxyCols = new Float32Array(galaxyCount * 3);
+
+    for(let i=0; i<galaxyCount; i++) {
+        const i3 = i * 3;
+
+        // Radius
+        const r = Math.random() * galaxyRadius;
+        
+        // Spin angle based on radius
+        const spinAngle = r * spin * 0.01; // Scaled down spin
+        
+        // Branch angle
+        const branchAngle = (i % branches) / branches * Math.PI * 2;
+
+        // Randomness for thickness/scatter
+        const randomX = Math.pow(Math.random(), randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * randomness * r;
+        const randomY = Math.pow(Math.random(), randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * randomness * r * 0.5; // Flattened Y
+        const randomZ = Math.pow(Math.random(), randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * randomness * r;
+
+        galaxyPos[i3] = Math.cos(branchAngle + spinAngle) * r + randomX;
+        galaxyPos[i3+1] = randomY - 50; // Shift down slightly
+        galaxyPos[i3+2] = Math.sin(branchAngle + spinAngle) * r + randomZ;
+
+        // Color Mixing
+        const mixedColor = insideColor.clone();
+        mixedColor.lerp(outsideColor, r / galaxyRadius);
+
+        galaxyCols[i3] = mixedColor.r;
+        galaxyCols[i3+1] = mixedColor.g;
+        galaxyCols[i3+2] = mixedColor.b;
+    }
+
+    galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPos, 3));
+    galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyCols, 3));
+
+    const galaxyMat = new THREE.PointsMaterial({
+        size: 2.5,
+        vertexColors: true,
+        map: particleTexture || undefined,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        opacity: 0.5
+    });
+
+    const galaxy = new THREE.Points(galaxyGeo, galaxyMat);
+    // Orient galaxy to be visible in background
+    galaxy.rotation.x = Math.PI / 8;
+    galaxy.position.y = -100;
+    galaxy.scale.set(1.5, 1.5, 1.5); // Make it huge
+    scene.add(galaxy);
 
     // --- Create Planets ---
     planetsRef.current = PLANETS.map((planetData) => {
       // 1. Geometry & Material
-      const geometry = new THREE.SphereGeometry(planetData.radius, 32, 32);
+      const geometry = new THREE.SphereGeometry(planetData.radius, 64, 64);
       let material;
       
       if (planetData.id === 'sun') {
@@ -111,10 +235,25 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
           color: planetData.color,
         });
         // Add glow to sun
-        const glowGeo = new THREE.SphereGeometry(planetData.radius * 1.2, 32, 32);
-        const glowMat = new THREE.MeshBasicMaterial({ color: planetData.color, transparent: true, opacity: 0.3, side: THREE.BackSide });
+        const glowGeo = new THREE.SphereGeometry(planetData.radius * 1.3, 64, 64);
+        const glowMat = new THREE.MeshBasicMaterial({ color: planetData.color, transparent: true, opacity: 0.25, side: THREE.BackSide });
         const glowMesh = new THREE.Mesh(glowGeo, glowMat);
         scene.add(glowMesh);
+        
+        // Add point light glow sprite
+        if (particleTexture) {
+             const spriteMat = new THREE.SpriteMaterial({ 
+                 map: particleTexture, 
+                 color: planetData.color, 
+                 transparent: true, 
+                 opacity: 0.8,
+                 blending: THREE.AdditiveBlending 
+             });
+             const sprite = new THREE.Sprite(spriteMat);
+             sprite.scale.set(planetData.radius * 6, planetData.radius * 6, 1);
+             scene.add(sprite);
+        }
+
       } else {
         material = new THREE.MeshStandardMaterial({ 
           color: planetData.color,
@@ -228,6 +367,10 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         // Self rotation
         planet.mesh.rotation.y += 0.005;
       });
+      
+      // Slowly rotate the galaxy
+      galaxy.rotation.y += 0.0002;
+      starField.rotation.y -= 0.0001;
 
       controls.update();
       renderer.render(scene, camera);
@@ -303,7 +446,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
 
 function createOrbit(radius: number, scene: THREE.Scene): THREE.Line | undefined {
     if (radius <= 0) return undefined;
-    const segments = 64;
+    const segments = 128; // Increased segments for smoother orbits
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array((segments + 1) * 3);
     
@@ -315,8 +458,20 @@ function createOrbit(radius: number, scene: THREE.Scene): THREE.Line | undefined
     }
     
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.LineBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.3 });
+    
+    const material = new THREE.LineDashedMaterial({
+      color: 0xffffff,
+      linewidth: 1,
+      scale: 1,
+      dashSize: 3,
+      gapSize: 2,
+      opacity: 0.15,
+      transparent: true
+    });
+    
     const orbit = new THREE.Line(geometry, material);
+    orbit.computeLineDistances(); // Required for LineDashedMaterial
+    
     scene.add(orbit);
     return orbit;
 }
