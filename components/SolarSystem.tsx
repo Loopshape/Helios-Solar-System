@@ -1,9 +1,10 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import gsap from 'gsap';
 import { PLANETS } from '../constants';
 import { PlanetData } from '../types';
+import { RotateCcw } from 'lucide-react';
 
 interface SolarSystemProps {
   onPlanetSelect: (planet: PlanetData) => void;
@@ -18,14 +19,17 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
   const controlsRef = useRef<OrbitControls | null>(null);
   const planetsRef = useRef<{ mesh: THREE.Mesh; data: PlanetData; angle: number; orbitLine?: THREE.Line }[]>([]);
   
-  // New Refs for enhancements
   const moonRef = useRef<{ mesh: THREE.Mesh; angle: number; distance: number; speed: number } | null>(null);
   const cometRef = useRef<{ mesh: THREE.Mesh; tail: THREE.Points; velocity: THREE.Vector3; active: boolean; tailPositions: Float32Array } | null>(null);
   const sunEffectsRef = useRef<{ halos: THREE.Mesh[]; sprites: THREE.Sprite[] } | null>(null);
-  const starFieldsRef = useRef<THREE.Points[]>([]);
+  const starFieldsRef = useRef<{ mesh: THREE.Points; material: THREE.ShaderMaterial }[]>([]);
+  const asteroidsRef = useRef<THREE.Points | null>(null);
+  const nebulaeRef = useRef<THREE.Points[]>([]);
   
   const animationFrameRef = useRef<number>(0);
-  const isInteractingRef = useRef<boolean>(false);
+  const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2(-1, -1));
+  const hoveredPlanetIdRef = useRef<string | null>(null);
+  const labelRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -49,7 +53,6 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    // Tone mapping for bright lights
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
     mountRef.current.appendChild(renderer.domElement);
@@ -63,11 +66,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     controls.maxDistance = 500;
     controlsRef.current = controls;
 
-    controls.addEventListener('start', () => { isInteractingRef.current = true; });
-    controls.addEventListener('end', () => { isInteractingRef.current = false; });
-
     // --- Lighting ---
-    // Sun is the main source
     const sunLight = new THREE.PointLight(0xffaa33, 3, 600);
     sunLight.position.set(0, 0, 0);
     scene.add(sunLight);
@@ -78,7 +77,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     const hemisphereLight = new THREE.HemisphereLight(0x444466, 0x000000, 0.4);
     scene.add(hemisphereLight);
 
-    // --- Helper: Particle Texture ---
+    // --- Textures & Materials ---
     const createParticleTexture = () => {
         const canvas = document.createElement('canvas');
         canvas.width = 64;
@@ -100,119 +99,162 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
 
     const particleTexture = createParticleTexture();
 
-    // --- ENHANCED GALAXY ---
-    const galaxyGeo = new THREE.BufferGeometry();
-    const galaxyCount = 20000;
-    const galaxyRadius = 450;
-    const branches = 6;
-    const spin = 1.8;
-    const randomness = 0.6;
-    const randomnessPower = 3;
-    
-    // Gradient Colors: Red Core -> Purple/Blue -> Cyan/White edges
-    const colorInside = new THREE.Color(0xff6030);
-    const colorOutside = new THREE.Color(0x1b3984);
-    const colorVar1 = new THREE.Color(0xff00ff); // Magenta
-    const colorVar2 = new THREE.Color(0x00ffff); // Cyan
-
-    const galaxyPos = new Float32Array(galaxyCount * 3);
-    const galaxyCols = new Float32Array(galaxyCount * 3);
-    const galaxySizes = new Float32Array(galaxyCount);
-
-    for(let i=0; i<galaxyCount; i++) {
-        const i3 = i * 3;
-        const r = Math.random() * galaxyRadius;
-        const spinAngle = r * spin * 0.01;
-        const branchAngle = (i % branches) / branches * Math.PI * 2;
-
-        const randomX = Math.pow(Math.random(), randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * randomness * r;
-        const randomY = Math.pow(Math.random(), randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * randomness * r * 0.5;
-        const randomZ = Math.pow(Math.random(), randomnessPower) * (Math.random() < 0.5 ? 1 : -1) * randomness * r;
-
-        galaxyPos[i3] = Math.cos(branchAngle + spinAngle) * r + randomX;
-        galaxyPos[i3+1] = randomY - 60; // Lower galaxy
-        galaxyPos[i3+2] = Math.sin(branchAngle + spinAngle) * r + randomZ;
-
-        // Complex color mixing
-        const mixedColor = colorInside.clone();
-        mixedColor.lerp(colorOutside, r / galaxyRadius);
-        
-        // Add random variations
-        if (Math.random() < 0.2) mixedColor.lerp(colorVar1, Math.random() * 0.5);
-        if (Math.random() < 0.2) mixedColor.lerp(colorVar2, Math.random() * 0.5);
-
-        galaxyCols[i3] = mixedColor.r;
-        galaxyCols[i3+1] = mixedColor.g;
-        galaxyCols[i3+2] = mixedColor.b;
-        
-        galaxySizes[i] = Math.random() * 3;
-    }
-
-    galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPos, 3));
-    galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyCols, 3));
-    galaxyGeo.setAttribute('size', new THREE.BufferAttribute(galaxySizes, 1));
-
-    const galaxyMat = new THREE.PointsMaterial({
-        size: 2,
-        vertexColors: true,
-        map: particleTexture || undefined,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        transparent: true,
-        opacity: 0.6
-    });
-
-    const galaxy = new THREE.Points(galaxyGeo, galaxyMat);
-    galaxy.rotation.x = Math.PI / 6;
-    galaxy.rotation.z = Math.PI / 12;
-    galaxy.position.y = -120;
-    scene.add(galaxy);
-
-    // --- ENHANCED STAR FIELDS (Parallax) ---
-    const createStarField = (count: number, size: number, radius: number) => {
+    // --- 1. DYNAMIC NEBULAE ---
+    const createNebula = (count: number, color: THREE.Color, range: number) => {
         const geo = new THREE.BufferGeometry();
         const pos = new Float32Array(count * 3);
-        const cols = new Float32Array(count * 3);
+        
+        for(let i=0; i<count; i++) {
+             // Random cloud distribution
+             const r = range + Math.random() * 100;
+             const theta = Math.random() * Math.PI * 2;
+             const phi = Math.random() * Math.PI;
+             
+             pos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+             pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta) * 0.5; // flatten slightly
+             pos[i*3+2] = r * Math.cos(phi);
+        }
+        
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const mat = new THREE.PointsMaterial({
+            size: 60,
+            color: color,
+            map: particleTexture || undefined,
+            transparent: true,
+            opacity: 0.08,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        });
+        const mesh = new THREE.Points(geo, mat);
+        scene.add(mesh);
+        nebulaeRef.current.push(mesh);
+    };
+    
+    // Add layers of nebulae
+    createNebula(100, new THREE.Color(0x330055), 200); // Purple
+    createNebula(100, new THREE.Color(0x002255), 250); // Blue
+
+    // --- 2. ASTEROID BELT ---
+    // Between Mars (30) and Jupiter (45)
+    const asteroidCount = 1500;
+    const asteroidGeo = new THREE.BufferGeometry();
+    const asteroidPos = new Float32Array(asteroidCount * 3);
+    const asteroidSizes = new Float32Array(asteroidCount);
+    
+    for(let i=0; i<asteroidCount; i++) {
+        const r = 34 + Math.random() * 8; // Radius 34-42
+        const theta = Math.random() * Math.PI * 2;
+        const y = (Math.random() - 0.5) * 1.5;
+        
+        asteroidPos[i*3] = r * Math.cos(theta);
+        asteroidPos[i*3+1] = y;
+        asteroidPos[i*3+2] = r * Math.sin(theta);
+        
+        asteroidSizes[i] = Math.random() * 0.4 + 0.1;
+    }
+    asteroidGeo.setAttribute('position', new THREE.BufferAttribute(asteroidPos, 3));
+    asteroidGeo.setAttribute('size', new THREE.BufferAttribute(asteroidSizes, 1));
+    
+    const asteroidMat = new THREE.ShaderMaterial({
+        uniforms: {
+            color: { value: new THREE.Color(0x888888) }
+        },
+        vertexShader: `
+          attribute float size;
+          void main() {
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = size * (300.0 / -mvPosition.z);
+            gl_Position = projectionMatrix * mvPosition;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 color;
+          void main() {
+            if (length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
+            gl_FragColor = vec4(color, 1.0);
+          }
+        `,
+        transparent: false
+    });
+
+    const asteroids = new THREE.Points(asteroidGeo, asteroidMat);
+    scene.add(asteroids);
+    asteroidsRef.current = asteroids;
+
+
+    // --- 3. TWINKLING STAR FIELDS ---
+    // Custom Shader for Twinkling
+    const starVertexShader = `
+        attribute float size;
+        attribute float speed;
+        attribute float brightness;
+        varying float vAlpha;
+        uniform float uTime;
+        void main() {
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = size * (300.0 / -mvPosition.z);
+          gl_Position = projectionMatrix * mvPosition;
+          
+          float twinkle = sin(uTime * speed + position.x * 0.05);
+          vAlpha = 0.5 + 0.5 * twinkle;
+          vAlpha *= brightness;
+        }
+    `;
+
+    const starFragmentShader = `
+        uniform sampler2D pointTexture;
+        varying float vAlpha;
+        void main() {
+          vec4 tex = texture2D(pointTexture, gl_PointCoord);
+          gl_FragColor = vec4(1.0, 1.0, 1.0, vAlpha) * tex;
+        }
+    `;
+
+    const createTwinklingStars = (count: number, baseSize: number, radius: number) => {
+        const geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(count * 3);
         const sizes = new Float32Array(count);
+        const speeds = new Float32Array(count);
+        const brightness = new Float32Array(count);
         
         for(let i=0; i<count; i++) {
             const r = radius + Math.random() * 500;
-            const theta = 2 * Math.PI * Math.random();
+            const theta = Math.random() * Math.PI * 2;
             const phi = Math.acos(2 * Math.random() - 1);
             
             pos[i*3] = r * Math.sin(phi) * Math.cos(theta);
             pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
             pos[i*3+2] = r * Math.cos(phi);
             
-            const color = new THREE.Color();
-            color.setHSL(Math.random(), 0.2, 0.8);
-            cols[i*3] = color.r;
-            cols[i*3+1] = color.g;
-            cols[i*3+2] = color.b;
-            
-            sizes[i] = Math.random() * size;
+            sizes[i] = baseSize * (0.5 + Math.random());
+            speeds[i] = 1.0 + Math.random() * 3.0;
+            brightness[i] = 0.5 + Math.random() * 0.5;
         }
         
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
         geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+        geo.setAttribute('speed', new THREE.BufferAttribute(speeds, 1));
+        geo.setAttribute('brightness', new THREE.BufferAttribute(brightness, 1));
         
-        const mat = new THREE.PointsMaterial({
-            vertexColors: true,
-            map: particleTexture || undefined,
+        const mat = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                pointTexture: { value: particleTexture }
+            },
+            vertexShader: starVertexShader,
+            fragmentShader: starFragmentShader,
             transparent: true,
-            opacity: 0.8,
             blending: THREE.AdditiveBlending,
             depthWrite: false
         });
         
         const mesh = new THREE.Points(geo, mat);
         scene.add(mesh);
-        return mesh;
+        return { mesh, material: mat };
     };
 
-    const starsBG = createStarField(5000, 1.5, 600); // Distant
-    const starsFG = createStarField(2000, 2.5, 300); // Nearer (faster)
+    const starsBG = createTwinklingStars(5000, 3.0, 600);
+    const starsFG = createTwinklingStars(2000, 4.0, 300);
     starFieldsRef.current = [starsBG, starsFG];
 
     // --- COMET SETUP ---
@@ -220,13 +262,11 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     const cometHeadMat = new THREE.MeshBasicMaterial({ color: 0xaaccff });
     const cometHead = new THREE.Mesh(cometHeadGeo, cometHeadMat);
     
-    // Comet Tail (Particles)
     const tailCount = 100;
     const tailGeo = new THREE.BufferGeometry();
     const tailPos = new Float32Array(tailCount * 3);
     const tailSizes = new Float32Array(tailCount);
     
-    // Init tail arrays
     for(let i=0; i<tailCount; i++) {
         tailSizes[i] = (1 - i/tailCount) * 3;
         tailPos[i*3] = 9999; 
@@ -255,32 +295,26 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         tail: cometTail,
         velocity: new THREE.Vector3(0.5, 0, 0.2),
         active: false,
-        tailPositions: new Float32Array(tailCount * 3) // History buffer
+        tailPositions: new Float32Array(tailCount * 3)
     };
-    // Hide initially
     cometHead.visible = false;
     cometTail.visible = false;
 
-
-    // --- SUN EFFECTS (Flames & Halos) ---
-    // Inner Glow
+    // --- SUN EFFECTS ---
     const sunHalos: THREE.Mesh[] = [];
     const sunSprites: THREE.Sprite[] = [];
-    
     const sunGeo = new THREE.SphereGeometry(5.2, 32, 32);
-    // Noise/Fire material layer 1
     const fireMat1 = new THREE.MeshBasicMaterial({
         color: 0xffaa00,
         transparent: true,
         opacity: 0.3,
         blending: THREE.AdditiveBlending,
-        wireframe: true, // Cheap "turbulence" effect
+        wireframe: true,
     });
     const sunFire1 = new THREE.Mesh(sunGeo, fireMat1);
     scene.add(sunFire1);
     sunHalos.push(sunFire1);
 
-    // Corona Sprite
     if (particleTexture) {
         const spriteMat = new THREE.SpriteMaterial({ 
             map: particleTexture, 
@@ -308,7 +342,6 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     }
     sunEffectsRef.current = { halos: sunHalos, sprites: sunSprites };
 
-
     // --- PLANETS ---
     const textureLoader = new THREE.TextureLoader();
 
@@ -333,7 +366,6 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
           emissiveIntensity: 0
         });
 
-        // Saturn Ring
         if (planetData.id === 'saturn') {
             const ringGeo = new THREE.RingGeometry(planetData.radius * 1.4, planetData.radius * 2.2, 64);
             const ringMat = new THREE.MeshStandardMaterial({ 
@@ -366,7 +398,6 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       mesh.userData = { id: planetData.id };
       scene.add(mesh);
 
-      // --- EARTH MOON SETUP ---
       if (planetData.id === 'earth') {
           const moonGeo = new THREE.SphereGeometry(planetData.radius * 0.27, 32, 32);
           const moonMat = new THREE.MeshStandardMaterial({
@@ -374,18 +405,16 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
               roughness: 0.8
           });
           const moonMesh = new THREE.Mesh(moonGeo, moonMat);
-          scene.add(moonMesh); // Add to scene, not earth, for independent rotation control
-          
+          scene.add(moonMesh);
           moonRef.current = {
               mesh: moonMesh,
               angle: 0,
-              distance: 4, // Distance from Earth
+              distance: 4,
               speed: 0.05
           };
       }
 
       const orbitLine = createOrbit(planetData.distance, scene);
-
       return {
         mesh,
         data: planetData,
@@ -394,47 +423,22 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       };
     });
 
-    // --- Raycaster ---
     const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
 
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
-        let clientX, clientY;
-        if (window.TouchEvent && event instanceof TouchEvent) {
-             clientX = event.touches[0].clientX;
-             clientY = event.touches[0].clientY;
-        } else if (event instanceof MouseEvent) {
-             clientX = event.clientX;
-             clientY = event.clientY;
-        } else {
-            return;
-        }
-
+    const onPointerMove = (event: MouseEvent) => {
         const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+        mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    };
 
-        raycaster.setFromCamera(mouse, camera);
-
-        // Filter meshes (exclude helper objects like orbits/stars)
-        const planetMeshes = planetsRef.current.map(p => p.mesh);
-        const intersects = raycaster.intersectObjects(planetMeshes, true);
-
-        if (intersects.length > 0) {
-            let object = intersects[0].object;
-            while(object.parent && object.parent.type !== 'Scene') {
-                if (object.userData.id) break;
-                object = object.parent;
-            }
-
-            const planetId = object.userData.id || (object.parent && object.parent.userData.id);
-            const found = PLANETS.find(p => p.id === planetId);
-            if (found) {
-                onPlanetSelect(found);
-            }
+    const onPointerDown = (event: MouseEvent) => {
+        if (hoveredPlanetIdRef.current) {
+            const found = PLANETS.find(p => p.id === hoveredPlanetIdRef.current);
+            if (found) onPlanetSelect(found);
         }
     };
 
+    mountRef.current.addEventListener('pointermove', onPointerMove);
     mountRef.current.addEventListener('pointerdown', onPointerDown);
 
     // --- ANIMATION LOOP ---
@@ -444,18 +448,55 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       animationFrameRef.current = requestAnimationFrame(animate);
       const elapsedTime = clock.getElapsedTime();
 
+      // Raycasting for Hover
+      raycaster.setFromCamera(mouseRef.current, camera);
+      const planetMeshes = planetsRef.current.map(p => p.mesh);
+      const intersects = raycaster.intersectObjects(planetMeshes, true);
+      
+      let newHoveredId: string | null = null;
+      if (intersects.length > 0) {
+          let object = intersects[0].object;
+          while(object.parent && object.parent.type !== 'Scene') {
+              if (object.userData.id) break;
+              object = object.parent;
+          }
+          newHoveredId = object.userData.id || (object.parent && object.parent.userData.id);
+      }
+      hoveredPlanetIdRef.current = newHoveredId;
+
+      // Update Labels
+      planetsRef.current.forEach(planet => {
+          const el = labelRefs.current[planet.data.id];
+          if (el) {
+              const pos = planet.mesh.position.clone();
+              pos.project(camera);
+
+              // Check if visible
+              const isVisible = pos.z < 1; // Not behind camera
+              
+              if (isVisible) {
+                  const x = (pos.x * 0.5 + 0.5) * mountRef.current!.clientWidth;
+                  const y = (-(pos.y * 0.5) + 0.5) * mountRef.current!.clientHeight;
+                  
+                  el.style.transform = `translate(${x}px, ${y}px)`;
+                  // Show if hovered OR selected
+                  const isActive = planet.data.id === hoveredPlanetIdRef.current || planet.data.id === selectedPlanetId;
+                  el.style.opacity = isActive ? '1' : '0';
+              } else {
+                  el.style.opacity = '0';
+              }
+          }
+      });
+
+
       // Rotate planets
       let earthPos = new THREE.Vector3();
-      
       planetsRef.current.forEach((planet) => {
         if (planet.data.distance > 0) {
             planet.angle += planet.data.speed * 0.5;
             planet.mesh.position.x = Math.cos(planet.angle) * planet.data.distance;
             planet.mesh.position.z = Math.sin(planet.angle) * planet.data.distance;
-            
-            if (planet.data.id === 'earth') {
-                earthPos.copy(planet.mesh.position);
-            }
+            if (planet.data.id === 'earth') earthPos.copy(planet.mesh.position);
         }
         planet.mesh.rotation.y += 0.005;
       });
@@ -465,35 +506,35 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
           moonRef.current.angle += moonRef.current.speed;
           moonRef.current.mesh.position.x = earthPos.x + Math.cos(moonRef.current.angle) * moonRef.current.distance;
           moonRef.current.mesh.position.z = earthPos.z + Math.sin(moonRef.current.angle) * moonRef.current.distance;
-          moonRef.current.mesh.position.y = earthPos.y + Math.sin(moonRef.current.angle) * 1; // Slight inclination
+          moonRef.current.mesh.position.y = earthPos.y + Math.sin(moonRef.current.angle) * 1;
           moonRef.current.mesh.rotation.y += 0.01;
       }
 
-      // Update Galaxy (More dynamic)
-      galaxy.rotation.y += 0.0003;
-      galaxy.rotation.x = Math.PI/6 + Math.sin(elapsedTime * 0.2) * 0.05; // Gentle tilt wobble
+      // Update Nebulae
+      nebulaeRef.current.forEach((mesh, i) => {
+          mesh.rotation.y += 0.0001 * (i % 2 === 0 ? 1 : -1);
+      });
 
-      // Update Stars (Parallax & Twinkle)
+      // Update Asteroids
+      if (asteroidsRef.current) {
+          asteroidsRef.current.rotation.y += 0.0005;
+      }
+
+      // Update Stars (Twinkle + Parallax)
       starFieldsRef.current.forEach((sf, i) => {
-          sf.rotation.y -= 0.0001 * (i + 1); // Foreground moves faster
-          
-          // Twinkle effect (randomly scale sizes in shader if using custom shader, but here we can't easily. 
-          // So we'll just rotate slightly for now or vibrate). 
-          // Simple flicker:
-          sf.material.opacity = 0.6 + Math.sin(elapsedTime * 3 + i) * 0.2;
+          sf.mesh.rotation.y -= 0.0001 * (i + 1);
+          sf.material.uniforms.uTime.value = elapsedTime;
       });
       
       // Update Sun Effects
       if (sunEffectsRef.current) {
-          // Pulse sprites
           sunEffectsRef.current.sprites.forEach((sprite, i) => {
               const scaleBase = i === 0 ? 30 : 15;
               const scaleVar = Math.sin(elapsedTime * 2 + i) * 2;
               sprite.scale.set(scaleBase + scaleVar, scaleBase + scaleVar, 1);
               sprite.material.rotation += 0.002 * (i % 2 === 0 ? 1 : -1);
           });
-          // Rotate fire halos
-          sunEffectsRef.current.halos.forEach((halo, i) => {
+          sunEffectsRef.current.halos.forEach((halo) => {
               halo.rotation.y -= 0.005;
               halo.rotation.z += 0.002;
               halo.scale.setScalar(1 + Math.sin(elapsedTime * 4) * 0.02);
@@ -503,46 +544,27 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       // Update Comet
       if (cometRef.current) {
           const comet = cometRef.current;
-          
-          // Spawn logic
-          if (!comet.active && Math.random() < 0.002) { // Low probability spawn
+          if (!comet.active && Math.random() < 0.002) {
               comet.active = true;
               comet.mesh.visible = true;
               comet.tail.visible = true;
-              
-              // Random start pos far away
               const angle = Math.random() * Math.PI * 2;
               const r = 200;
               comet.mesh.position.set(Math.cos(angle) * r, Math.random() * 50 - 25, Math.sin(angle) * r);
-              
-              // Velocity towards center but missing it
               const target = new THREE.Vector3(Math.random()*40-20, 0, Math.random()*40-20);
               const dir = new THREE.Vector3().subVectors(target, comet.mesh.position).normalize();
-              comet.velocity.copy(dir).multiplyScalar(0.8 + Math.random() * 0.5); // Random speed
-              
-              // Reset tail history
+              comet.velocity.copy(dir).multiplyScalar(0.8 + Math.random() * 0.5);
               for(let i=0; i<comet.tailPositions.length; i++) comet.tailPositions[i] = comet.mesh.position.toArray()[i%3];
           }
 
           if (comet.active) {
               comet.mesh.position.add(comet.velocity);
-              
-              // Update tail
-              // Shift history
-              // This is a simple trail effect
               const positions = comet.tail.geometry.attributes.position.array as Float32Array;
-              // Shift all points back
-              for (let i = positions.length - 1; i >= 3; i--) {
-                  positions[i] = positions[i - 3];
-              }
-              // Set head
+              for (let i = positions.length - 1; i >= 3; i--) positions[i] = positions[i - 3];
               positions[0] = comet.mesh.position.x;
               positions[1] = comet.mesh.position.y;
               positions[2] = comet.mesh.position.z;
-              
               comet.tail.geometry.attributes.position.needsUpdate = true;
-
-              // Deactivate if out of bounds
               if (comet.mesh.position.length() > 250) {
                   comet.active = false;
                   comet.mesh.visible = false;
@@ -559,6 +581,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
       if (mountRef.current) {
+        mountRef.current.removeEventListener('pointermove', onPointerMove);
         mountRef.current.removeEventListener('pointerdown', onPointerDown);
         if (rendererRef.current) {
             mountRef.current.removeChild(rendererRef.current.domElement);
@@ -568,27 +591,20 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     };
   }, []); 
 
-  // --- Handle Planet Selection (Camera & Glow) ---
+  // --- Handle Planet Selection ---
   useEffect(() => {
     if (!cameraRef.current || !controlsRef.current) return;
 
-    // Reset previous selection visuals
     planetsRef.current.forEach(p => {
-        // Reset scale
         gsap.to(p.mesh.scale, { x: 1, y: 1, z: 1, duration: 0.5 });
-        
-        // Reset emissive glow (Only for StandardMaterials)
         if (p.mesh instanceof THREE.Mesh && p.mesh.material instanceof THREE.MeshStandardMaterial) {
             gsap.to(p.mesh.material, { emissiveIntensity: 0, duration: 0.5 });
         } else if (p.mesh.type === 'Group') {
-            // Saturn case (Group)
             const planetMesh = p.mesh.children[0] as THREE.Mesh;
             if (planetMesh.material instanceof THREE.MeshStandardMaterial) {
                 gsap.to(planetMesh.material, { emissiveIntensity: 0, duration: 0.5 });
             }
         }
-
-        // Reset orbit line
         if (p.orbitLine) {
             const mat = p.orbitLine.material as THREE.LineDashedMaterial;
             gsap.to(mat, { opacity: 0.15, duration: 0.5 });
@@ -604,35 +620,29 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         const radius = targetPlanet.data.radius;
         const offset = Math.max(radius * 4, 10); 
 
-        // 1. Camera Animation
         gsap.to(controlsRef.current.target, {
             x: x, y: y, z: z, duration: 1.5, ease: "power2.inOut"
         });
-
         gsap.to(cameraRef.current.position, {
             x: x + offset, y: y + offset * 0.5, z: z + offset,
             duration: 1.5, ease: "power2.inOut",
             onUpdate: () => controlsRef.current?.update()
         });
 
-        // 2. Pulse Scale
         gsap.fromTo(targetPlanet.mesh.scale, 
             { x: 1, y: 1, z: 1 },
             { x: 1.2, y: 1.2, z: 1.2, duration: 0.6, yoyo: true, repeat: 3, ease: "sine.inOut" }
         );
 
-        // 3. Emissive Glow (Selection Highlight)
         if (targetPlanet.data.id !== 'sun') {
              let mat;
              if (targetPlanet.mesh instanceof THREE.Mesh) mat = targetPlanet.mesh.material as THREE.MeshStandardMaterial;
              else mat = (targetPlanet.mesh.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial;
-             
              if (mat) {
                  gsap.to(mat, { emissiveIntensity: 0.5, duration: 0.8, ease: "power2.out" });
              }
         }
 
-        // 4. Orbit Line Highlight
         if (targetPlanet.orbitLine) {
             const mat = targetPlanet.orbitLine.material as THREE.LineDashedMaterial;
             mat.color.setHex(0x60a5fa);
@@ -656,12 +666,52 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(width, height);
     };
-
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  return <div ref={mountRef} className="w-full h-full" />;
+  const handleResetCamera = () => {
+    if(!cameraRef.current || !controlsRef.current) return;
+    
+    gsap.to(cameraRef.current.position, {
+        x: 0, y: 80, z: 160, duration: 2, ease: "power2.inOut"
+    });
+    gsap.to(controlsRef.current.target, {
+        x: 0, y: 0, z: 0, duration: 2, ease: "power2.inOut",
+        onUpdate: () => controlsRef.current?.update()
+    });
+  };
+
+  return (
+    <div ref={mountRef} className="w-full h-full relative">
+        {/* Reset Camera Button */}
+        <button 
+            onClick={handleResetCamera}
+            className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 p-2 rounded-full hover:bg-white/20 transition-all text-white z-10 group"
+            title="Reset View"
+        >
+            <RotateCcw size={20} className="group-hover:rotate-180 transition-transform duration-500"/>
+        </button>
+
+        {/* Planet Labels */}
+        {PLANETS.map(p => (
+            <div 
+                key={p.id} 
+                ref={el => labelRefs.current[p.id] = el}
+                className="absolute text-white text-[10px] md:text-xs font-bold pointer-events-none transition-opacity duration-300 uppercase tracking-widest"
+                style={{ 
+                    opacity: 0, 
+                    textShadow: '0 0 4px #000, 0 0 8px #000', 
+                    top: 0, left: 0,
+                    transform: 'translate(-50%, -100%)', // Centered above
+                    marginTop: '-10px'
+                }}
+            >
+                {p.name}
+            </div>
+        ))}
+    </div>
+  );
 };
 
 function createOrbit(radius: number, scene: THREE.Scene): THREE.Line | undefined {
@@ -669,16 +719,13 @@ function createOrbit(radius: number, scene: THREE.Scene): THREE.Line | undefined
     const segments = 128;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array((segments + 1) * 3);
-    
     for (let i = 0; i <= segments; i++) {
         const theta = (i / segments) * Math.PI * 2;
         positions[i * 3] = Math.cos(theta) * radius;
         positions[i * 3 + 1] = 0;
         positions[i * 3 + 2] = Math.sin(theta) * radius;
     }
-    
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    
     const material = new THREE.LineDashedMaterial({
       color: 0xffffff,
       linewidth: 1,
@@ -688,7 +735,6 @@ function createOrbit(radius: number, scene: THREE.Scene): THREE.Line | undefined
       opacity: 0.15,
       transparent: true
     });
-    
     const orbit = new THREE.Line(geometry, material);
     orbit.computeLineDistances();
     scene.add(orbit);
