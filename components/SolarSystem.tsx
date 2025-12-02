@@ -41,6 +41,9 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Enable shadow map for better depth if needed, though simple planets might not need it
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -56,13 +59,33 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     controls.addEventListener('end', () => { isInteractingRef.current = false; });
 
     // --- Lights ---
-    // The Sun emits light
-    const sunLight = new THREE.PointLight(0xffffff, 2, 300);
+    // 1. Central Sun Light (Point Light)
+    // The main source of light in the system
+    const sunLight = new THREE.PointLight(0xffffff, 2.5, 400);
     sunLight.position.set(0, 0, 0);
     scene.add(sunLight);
 
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.5); // Soft white light
+    // 2. Ambient Light
+    // Low intensity base light to prevent pitch black shadows
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.1); 
     scene.add(ambientLight);
+
+    // 3. Hemisphere Light
+    // Simulates complex environmental light (Sky vs Ground)
+    // Gives a nice cool tint to the shadows (space environment)
+    const hemisphereLight = new THREE.HemisphereLight(0x2a2a35, 0x000000, 0.5);
+    scene.add(hemisphereLight);
+
+    // 4. Directional Lights
+    // Add subtle fill/rim lighting from distant sources (e.g. galactic core)
+    const dirLightMain = new THREE.DirectionalLight(0xffffff, 0.2);
+    dirLightMain.position.set(100, 50, 100);
+    scene.add(dirLightMain);
+
+    // Cooler fill light from opposite side
+    const dirLightFill = new THREE.DirectionalLight(0x4444ff, 0.15);
+    dirLightFill.position.set(-100, -50, -100);
+    scene.add(dirLightFill);
 
     // --- Starfield Background ---
     const starGeometry = new THREE.BufferGeometry();
@@ -96,13 +119,20 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         material = new THREE.MeshStandardMaterial({ 
           color: planetData.color,
           roughness: 0.7,
-          metalness: 0.1
+          metalness: 0.2, // Increased metalness slightly for better light interaction
         });
         
         // Ring for Saturn
         if (planetData.id === 'saturn') {
-            const ringGeo = new THREE.RingGeometry(planetData.radius * 1.4, planetData.radius * 2.2, 32);
-            const ringMat = new THREE.MeshBasicMaterial({ color: 0xaa8844, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+            const ringGeo = new THREE.RingGeometry(planetData.radius * 1.4, planetData.radius * 2.2, 64);
+            const ringMat = new THREE.MeshStandardMaterial({ 
+                color: 0xaa8844, 
+                side: THREE.DoubleSide, 
+                transparent: true, 
+                opacity: 0.8,
+                roughness: 0.5,
+                metalness: 0.1
+            });
             const ring = new THREE.Mesh(ringGeo, ringMat);
             ring.rotation.x = Math.PI / 2;
             const group = new THREE.Group();
