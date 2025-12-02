@@ -1,0 +1,5 @@
+{
+  "name": "Helios 3D Solar System",
+  "description": "A responsive, interactive 3D WebGL solar system visualization using React, Three.js, and GSAP.",
+  "requestFramePermissions": []
+}
