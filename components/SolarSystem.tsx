@@ -225,14 +225,21 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     scene.add(galaxy);
 
     // --- Create Planets ---
+    const textureLoader = new THREE.TextureLoader();
+
     planetsRef.current = PLANETS.map((planetData) => {
       // 1. Geometry & Material
       const geometry = new THREE.SphereGeometry(planetData.radius, 64, 64);
       let material;
       
+      const texture = planetData.textureUrl ? textureLoader.load(planetData.textureUrl) : null;
+      // Use white if texture is present to avoid tinting
+      const displayColor = texture ? 0xffffff : planetData.color;
+
       if (planetData.id === 'sun') {
         material = new THREE.MeshBasicMaterial({ 
-          color: planetData.color,
+          color: displayColor,
+          map: texture || undefined
         });
         // Add glow to sun
         const glowGeo = new THREE.SphereGeometry(planetData.radius * 1.3, 64, 64);
@@ -256,7 +263,8 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
 
       } else {
         material = new THREE.MeshStandardMaterial({ 
-          color: planetData.color,
+          color: displayColor,
+          map: texture || undefined,
           roughness: 0.7,
           metalness: 0.2, // Increased metalness slightly for better light interaction
         });
@@ -393,7 +401,26 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
 
   // --- Handle Planet Selection & Camera Transition ---
   useEffect(() => {
-    if (!selectedPlanetId || !cameraRef.current || !controlsRef.current) return;
+    if (!cameraRef.current || !controlsRef.current) return;
+
+    // 1. Reset all planets to default state first
+    planetsRef.current.forEach(p => {
+        // Kill existing tweens on this object
+        gsap.killTweensOf(p.mesh.scale);
+        if (p.orbitLine) gsap.killTweensOf(p.orbitLine.material);
+
+        // Smoothly reset scale to 1
+        gsap.to(p.mesh.scale, { x: 1, y: 1, z: 1, duration: 0.5 });
+
+        // Smoothly reset orbit opacity
+        if (p.orbitLine) {
+            const mat = p.orbitLine.material as THREE.LineDashedMaterial;
+            gsap.to(mat, { opacity: 0.15, duration: 0.5 });
+            mat.color.setHex(0xffffff);
+        }
+    });
+
+    if (!selectedPlanetId) return;
 
     const targetPlanet = planetsRef.current.find(p => p.data.id === selectedPlanetId);
     if (targetPlanet) {
@@ -421,8 +448,38 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
             ease: "power2.inOut",
             onUpdate: () => controlsRef.current?.update()
         });
-    } else {
-        // Reset to default view if selection cleared (optional, currently not triggered by UI)
+
+        // --- NEW: Pulse Animation for selected planet ---
+        gsap.fromTo(targetPlanet.mesh.scale, 
+            { x: 1, y: 1, z: 1 },
+            { 
+                x: 1.3, y: 1.3, z: 1.3, 
+                duration: 0.6, 
+                yoyo: true, 
+                repeat: 3, 
+                ease: "sine.inOut" 
+            }
+        );
+
+        // --- NEW: Highlight Orbit Line ---
+        if (targetPlanet.orbitLine) {
+            const mat = targetPlanet.orbitLine.material as THREE.LineDashedMaterial;
+            mat.color.setHex(0x60a5fa); // Bright blue highlight
+            gsap.fromTo(mat, 
+                { opacity: 0.15 },
+                { 
+                    opacity: 0.8, 
+                    duration: 0.6, 
+                    yoyo: true, 
+                    repeat: 3,
+                    ease: "sine.inOut",
+                    onComplete: () => {
+                         // Settle at a slightly visible state after pulse
+                         gsap.to(mat, { opacity: 0.3, duration: 0.5 });
+                    }
+                }
+            );
+        }
     }
   }, [selectedPlanetId]);
 

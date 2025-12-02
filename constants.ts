@@ -1,5 +1,7 @@
 import { PlanetData } from './types';
 
+const TEXTURE_BASE = 'https://s3-us-west-2.amazonaws.com/s.cdpn.io/17271';
+
 export const PLANETS: PlanetData[] = [
   {
     id: 'sun',
@@ -9,6 +11,7 @@ export const PLANETS: PlanetData[] = [
     distance: 0,
     speed: 0,
     description: 'The star around which the earth orbits.',
+    textureUrl: `${TEXTURE_BASE}/sun.jpg`,
     details: { gravity: 274, dayLength: '-', yearLength: '-', temp: '5500°C' }
   },
   {
@@ -19,6 +22,7 @@ export const PLANETS: PlanetData[] = [
     distance: 10,
     speed: 0.02,
     description: 'The smallest planet in the Solar System and the closest to the Sun.',
+    textureUrl: `${TEXTURE_BASE}/mercury.jpg`,
     details: { gravity: 3.7, dayLength: '58.6d', yearLength: '88d', temp: '167°C' }
   },
   {
@@ -29,6 +33,7 @@ export const PLANETS: PlanetData[] = [
     distance: 15,
     speed: 0.015,
     description: 'The second planet from the Sun. It has a thick atmosphere.',
+    textureUrl: `${TEXTURE_BASE}/venus.jpg`,
     details: { gravity: 8.87, dayLength: '243d', yearLength: '225d', temp: '464°C' }
   },
   {
@@ -39,6 +44,7 @@ export const PLANETS: PlanetData[] = [
     distance: 22,
     speed: 0.01,
     description: 'Our home, the third planet from the Sun.',
+    textureUrl: `${TEXTURE_BASE}/earth.jpg`,
     details: { gravity: 9.8, dayLength: '24h', yearLength: '365.25d', temp: '15°C' }
   },
   {
@@ -49,6 +55,7 @@ export const PLANETS: PlanetData[] = [
     distance: 30,
     speed: 0.008,
     description: 'The fourth planet from the Sun and the second-smallest planet.',
+    textureUrl: `${TEXTURE_BASE}/mars.jpg`,
     details: { gravity: 3.71, dayLength: '24h 37m', yearLength: '687d', temp: '-63°C' }
   },
   {
@@ -59,6 +66,7 @@ export const PLANETS: PlanetData[] = [
     distance: 45,
     speed: 0.004,
     description: 'The largest planet in the Solar System.',
+    textureUrl: `${TEXTURE_BASE}/jupiter.jpg`,
     details: { gravity: 24.79, dayLength: '9h 56m', yearLength: '12y', temp: '-108°C' }
   },
   {
@@ -69,6 +77,7 @@ export const PLANETS: PlanetData[] = [
     distance: 60,
     speed: 0.003,
     description: 'The sixth planet from the Sun and the second-largest planet.',
+    textureUrl: `${TEXTURE_BASE}/saturn.jpg`,
     details: { gravity: 10.44, dayLength: '10h 42m', yearLength: '29y', temp: '-139°C' }
   },
   {
@@ -79,6 +88,7 @@ export const PLANETS: PlanetData[] = [
     distance: 75,
     speed: 0.002,
     description: 'The seventh planet from the Sun.',
+    textureUrl: `${TEXTURE_BASE}/uranus.jpg`,
     details: { gravity: 8.69, dayLength: '17h 14m', yearLength: '84y', temp: '-197°C' }
   },
   {
@@ -89,6 +99,7 @@ export const PLANETS: PlanetData[] = [
     distance: 90,
     speed: 0.001,
     description: 'The eighth and farthest-known Solar planet from the Sun.',
+    textureUrl: `${TEXTURE_BASE}/neptune.jpg`,
     details: { gravity: 11.15, dayLength: '16h 6m', yearLength: '165y', temp: '-201°C' }
   },
 ];
