@@ -17,14 +17,16 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  const planetsRef = useRef<{ mesh: THREE.Mesh; data: PlanetData; angle: number; orbitLine?: THREE.Line }[]>([]);
+  const planetsRef = useRef<{ mesh: THREE.Object3D; data: PlanetData; angle: number; orbitLine?: THREE.Line }[]>([]);
   
   const moonRef = useRef<{ mesh: THREE.Mesh; angle: number; distance: number; speed: number } | null>(null);
   const cometRef = useRef<{ mesh: THREE.Mesh; tail: THREE.Points; velocity: THREE.Vector3; active: boolean; tailPositions: Float32Array } | null>(null);
   const sunEffectsRef = useRef<{ halos: THREE.Mesh[]; sprites: THREE.Sprite[] } | null>(null);
+  const magneticFieldRef = useRef<THREE.Group | null>(null);
   const starFieldsRef = useRef<{ mesh: THREE.Points; material: THREE.ShaderMaterial }[]>([]);
   const asteroidsRef = useRef<THREE.Points | null>(null);
   const nebulaeRef = useRef<THREE.Points[]>([]);
+  const auroraMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   
   const animationFrameRef = useRef<number>(0);
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2(-1, -1));
@@ -54,7 +56,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMappingExposure = 1.3; 
     mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -67,14 +69,24 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     controlsRef.current = controls;
 
     // --- Lighting ---
-    const sunLight = new THREE.PointLight(0xffaa33, 3, 600);
+    // Sun PointLight - Source of shadows
+    const sunLight = new THREE.PointLight(0xffaa33, 3.0, 800);
     sunLight.position.set(0, 0, 0);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.camera.near = 0.1;
+    sunLight.shadow.camera.far = 500;
+    sunLight.shadow.bias = -0.0001; // Reduce shadow acne
+    sunLight.shadow.radius = 2; // Soften shadows
     scene.add(sunLight);
 
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.05); 
+    // Ambient Light - Brightened to remove "too darken textures"
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); 
     scene.add(ambientLight);
 
-    const hemisphereLight = new THREE.HemisphereLight(0x444466, 0x000000, 0.4);
+    // Hemisphere Light - Fill light
+    const hemisphereLight = new THREE.HemisphereLight(0x444466, 0x080820, 0.5);
     scene.add(hemisphereLight);
 
     // --- Textures & Materials ---
@@ -342,6 +354,121 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     }
     sunEffectsRef.current = { halos: sunHalos, sprites: sunSprites };
 
+    // --- 4. ELECTROMAGNETIC FIELD (Sun) ---
+    // Visualizing the powerful magnetic field lines of the sun
+    const magneticGroup = new THREE.Group();
+    const magMaterial = new THREE.LineBasicMaterial({
+        color: 0x4488ff,
+        transparent: true,
+        opacity: 0.2,
+        blending: THREE.AdditiveBlending
+    });
+    
+    const createFieldLoop = (xRadius: number, yRadius: number, rotationAngle: number) => {
+        const curve = new THREE.EllipseCurve(0, 0, xRadius, yRadius, 0, 2 * Math.PI, false, 0);
+        const points = curve.getPoints(64);
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const line = new THREE.Line(geometry, magMaterial);
+        line.rotation.y = rotationAngle;
+        magneticGroup.add(line);
+    };
+
+    // Create toroidal field lines
+    for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI; 
+        createFieldLoop(8, 15, angle);  // Inner loop
+        createFieldLoop(15, 30, angle); // Outer loop
+    }
+    
+    magneticGroup.rotation.z = 0.1; // Tilt
+    scene.add(magneticGroup);
+    magneticFieldRef.current = magneticGroup;
+
+    // --- 5. MASS-GRAVIMETRIC GRID (Metric) ---
+    // Visualize the plane of spacetime curvature and distance metric
+    const polarGrid = new THREE.PolarGridHelper(120, 16, 8, 0x334455, 0x111111);
+    polarGrid.position.y = -2; // Slightly below ecliptic plane
+    
+    if (polarGrid.material instanceof THREE.Material) {
+        polarGrid.material.transparent = true;
+        polarGrid.material.opacity = 0.15;
+        polarGrid.material.blending = THREE.AdditiveBlending;
+    }
+    
+    scene.add(polarGrid);
+
+    // --- AURORA SHADERS ---
+    const auroraVertexShader = `
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vViewPosition;
+      void main() {
+        vUv = uv;
+        vNormal = normalize(normalMatrix * normal);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewPosition = -mvPosition.xyz;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `;
+
+    const auroraFragmentShader = `
+      uniform float uTime;
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vViewPosition;
+
+      vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
+
+      float snoise(vec2 v){
+        const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                 -0.577350269189626, 0.024390243902439);
+        vec2 i  = floor(v + dot(v, C.yy) );
+        vec2 x0 = v -   i + dot(i, C.xx);
+        vec2 i1;
+        i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+        vec4 x12 = x0.xyxy + C.xxzz;
+        x12.xy -= i1;
+        i = mod(i, 289.0);
+        vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 ))
+        + i.x + vec3(0.0, i1.x, 1.0 ));
+        vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+        m = m*m ;
+        m = m*m ;
+        vec3 x = 2.0 * fract(p * C.www) - 1.0;
+        vec3 h = abs(x) - 0.5;
+        vec3 ox = floor(x + 0.5);
+        vec3 a0 = x - ox;
+        m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
+        vec3 g;
+        g.x  = a0.x  * x0.x  + h.x  * x0.y;
+        g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+        return 130.0 * dot(m, g);
+      }
+
+      void main() {
+        float viewDirDiff = dot(normalize(vViewPosition), vNormal);
+        float fresnel = 1.0 - abs(viewDirDiff);
+        fresnel = pow(fresnel, 2.0);
+
+        float distFromCenter = abs(vUv.y - 0.5) * 2.0; 
+        // Focus on poles: 0.7 to 0.95
+        float mask = smoothstep(0.65, 0.8, distFromCenter) * (1.0 - smoothstep(0.98, 1.0, distFromCenter));
+        
+        float noise1 = snoise(vec2(vUv.x * 12.0 + uTime * 0.1, vUv.y * 10.0));
+        float noise2 = snoise(vec2(vUv.x * 18.0 - uTime * 0.15, vUv.y * 15.0 + uTime * 0.05));
+        
+        float combinedNoise = (noise1 + noise2) * 0.5;
+        float streaks = smoothstep(0.2, 0.7, combinedNoise);
+
+        vec3 colorGreen = vec3(0.0, 1.0, 0.6);
+        vec3 colorPurple = vec3(0.6, 0.2, 1.0);
+        vec3 auroraColor = mix(colorGreen, colorPurple, sin(vUv.x * 6.0 + uTime) * 0.5 + 0.5);
+        
+        float alpha = mask * streaks * 0.5 * fresnel;
+        gl_FragColor = vec4(auroraColor, alpha);
+      }
+    `;
+
     // --- PLANETS ---
     const textureLoader = new THREE.TextureLoader();
 
@@ -349,19 +476,27 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       const geometry = new THREE.SphereGeometry(planetData.radius, 64, 64);
       let material;
       const texture = planetData.textureUrl ? textureLoader.load(planetData.textureUrl) : null;
+      // If a texture exists, use it; otherwise fallback to color. 
+      // Emissive will handle the "glow" selection state.
       const displayColor = texture ? 0xffffff : planetData.color;
 
       if (planetData.id === 'sun') {
-        material = new THREE.MeshBasicMaterial({ 
-          color: 0xffcc33,
-          map: texture || undefined
+        // Enhanced Sun Material with Emissive properties
+        material = new THREE.MeshStandardMaterial({ 
+          color: 0xffaa00,
+          map: texture || undefined,
+          emissive: 0xff4400,
+          emissiveIntensity: 1.0,
+          emissiveMap: texture || undefined,
+          roughness: 0.4,
+          metalness: 0.0
         });
       } else {
         material = new THREE.MeshStandardMaterial({ 
           color: displayColor,
           map: texture || undefined,
-          roughness: 0.7,
-          metalness: 0.2,
+          roughness: 0.6, // Reduced roughness for better light interaction
+          metalness: 0.1, // Slight metallic feel
           emissive: new THREE.Color(planetData.color),
           emissiveIntensity: 0
         });
@@ -378,15 +513,21 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
             });
             const ring = new THREE.Mesh(ringGeo, ringMat);
             ring.rotation.x = Math.PI / 2;
+            ring.receiveShadow = true;
+            ring.castShadow = true;
+
             const group = new THREE.Group();
             const planetMesh = new THREE.Mesh(geometry, material);
+            planetMesh.castShadow = true;
+            planetMesh.receiveShadow = true;
+
             group.add(planetMesh);
             group.add(ring);
             
             group.userData = { id: planetData.id };
             scene.add(group);
             return {
-                mesh: group as unknown as THREE.Mesh,
+                mesh: group,
                 data: planetData,
                 angle: Math.random() * Math.PI * 2,
                 orbitLine: createOrbit(planetData.distance, scene)
@@ -396,6 +537,16 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
 
       const mesh = new THREE.Mesh(geometry, material);
       mesh.userData = { id: planetData.id };
+      
+      // Sun shouldn't cast/receive shadows in the same way as planets to avoid artifacts with internal light
+      if (planetData.id === 'sun') {
+          mesh.castShadow = false; 
+          mesh.receiveShadow = false;
+      } else {
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+      }
+
       scene.add(mesh);
 
       if (planetData.id === 'earth') {
@@ -405,6 +556,8 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
               roughness: 0.8
           });
           const moonMesh = new THREE.Mesh(moonGeo, moonMat);
+          moonMesh.castShadow = true;
+          moonMesh.receiveShadow = true;
           scene.add(moonMesh);
           moonRef.current = {
               mesh: moonMesh,
@@ -412,6 +565,21 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
               distance: 4,
               speed: 0.05
           };
+
+          // Aurora
+          const auroraGeo = new THREE.SphereGeometry(planetData.radius * 1.02, 64, 64);
+          const auroraMat = new THREE.ShaderMaterial({
+            uniforms: { uTime: { value: 0 } },
+            vertexShader: auroraVertexShader,
+            fragmentShader: auroraFragmentShader,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            depthWrite: false,
+          });
+          const auroraMesh = new THREE.Mesh(auroraGeo, auroraMat);
+          mesh.add(auroraMesh);
+          auroraMaterialRef.current = auroraMat;
       }
 
       const orbitLine = createOrbit(planetData.distance, scene);
@@ -422,6 +590,22 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         orbitLine
       };
     });
+
+    // Initialize Sun Pulse Animation
+    const sunObj = planetsRef.current.find(p => p.data.id === 'sun');
+    if (sunObj && sunObj.mesh) {
+        // Handle Mesh or Group (Sun is a Mesh)
+        if (sunObj.mesh instanceof THREE.Mesh && sunObj.mesh.material instanceof THREE.MeshStandardMaterial) {
+            const mat = sunObj.mesh.material;
+            gsap.to(mat, {
+                emissiveIntensity: 2.5,
+                duration: 2 + Math.random(),
+                repeat: -1,
+                yoyo: true,
+                ease: "sine.inOut"
+            });
+        }
+    }
 
     const raycaster = new THREE.Raycaster();
 
@@ -464,31 +648,6 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
       }
       hoveredPlanetIdRef.current = newHoveredId;
 
-      // Update Labels
-      planetsRef.current.forEach(planet => {
-          const el = labelRefs.current[planet.data.id];
-          if (el) {
-              const pos = planet.mesh.position.clone();
-              pos.project(camera);
-
-              // Check if visible
-              const isVisible = pos.z < 1; // Not behind camera
-              
-              if (isVisible) {
-                  const x = (pos.x * 0.5 + 0.5) * mountRef.current!.clientWidth;
-                  const y = (-(pos.y * 0.5) + 0.5) * mountRef.current!.clientHeight;
-                  
-                  el.style.transform = `translate(${x}px, ${y}px)`;
-                  // Show if hovered OR selected
-                  const isActive = planet.data.id === hoveredPlanetIdRef.current || planet.data.id === selectedPlanetId;
-                  el.style.opacity = isActive ? '1' : '0';
-              } else {
-                  el.style.opacity = '0';
-              }
-          }
-      });
-
-
       // Rotate planets
       let earthPos = new THREE.Vector3();
       planetsRef.current.forEach((planet) => {
@@ -510,6 +669,37 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
           moonRef.current.mesh.rotation.y += 0.01;
       }
 
+      // Update Aurora
+      if (auroraMaterialRef.current) {
+          auroraMaterialRef.current.uniforms.uTime.value = elapsedTime;
+      }
+
+      // Update Labels
+      planetsRef.current.forEach(planet => {
+          const el = labelRefs.current[planet.data.id];
+          if (el) {
+              const pos = planet.mesh.position.clone();
+              pos.project(camera);
+
+              // Check if visible
+              const isVisible = pos.z < 1; // Not behind camera
+              
+              if (isVisible) {
+                  const x = (pos.x * 0.5 + 0.5) * mountRef.current!.clientWidth;
+                  const y = (-(pos.y * 0.5) + 0.5) * mountRef.current!.clientHeight;
+                  
+                  // Use translate3d for better performance
+                  el.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -100%)`;
+                  
+                  // Show if hovered OR selected
+                  const isActive = planet.data.id === hoveredPlanetIdRef.current || planet.data.id === selectedPlanetId;
+                  el.style.opacity = isActive ? '1' : '0';
+              } else {
+                  el.style.opacity = '0';
+              }
+          }
+      });
+
       // Update Nebulae
       nebulaeRef.current.forEach((mesh, i) => {
           mesh.rotation.y += 0.0001 * (i % 2 === 0 ? 1 : -1);
@@ -520,7 +710,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
           asteroidsRef.current.rotation.y += 0.0005;
       }
 
-      // Update Stars (Twinkle + Parallax)
+      // Update Stars
       starFieldsRef.current.forEach((sf, i) => {
           sf.mesh.rotation.y -= 0.0001 * (i + 1);
           sf.material.uniforms.uTime.value = elapsedTime;
@@ -541,6 +731,18 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
           });
       }
 
+      // Update Magnetic Field pulsing
+      if (magneticFieldRef.current) {
+          magneticFieldRef.current.rotation.y -= 0.002;
+          magneticFieldRef.current.children.forEach((child) => {
+             if (child instanceof THREE.Line) {
+                 const mat = child.material as THREE.LineBasicMaterial;
+                 // Subtle breathing effect for field lines
+                 mat.opacity = 0.15 + Math.sin(elapsedTime * 2.5) * 0.05;
+             }
+          });
+      }
+
       // Update Comet
       if (cometRef.current) {
           const comet = cometRef.current;
@@ -554,16 +756,23 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
               const target = new THREE.Vector3(Math.random()*40-20, 0, Math.random()*40-20);
               const dir = new THREE.Vector3().subVectors(target, comet.mesh.position).normalize();
               comet.velocity.copy(dir).multiplyScalar(0.8 + Math.random() * 0.5);
-              for(let i=0; i<comet.tailPositions.length; i++) comet.tailPositions[i] = comet.mesh.position.toArray()[i%3];
+              
+              // Reset tail positions
+              const initialPos = comet.mesh.position.toArray();
+              for(let i=0; i<comet.tailPositions.length; i++) comet.tailPositions[i] = initialPos[i%3];
           }
 
           if (comet.active) {
               comet.mesh.position.add(comet.velocity);
+              
+              // Efficient array shifting for tail effect
               const positions = comet.tail.geometry.attributes.position.array as Float32Array;
-              for (let i = positions.length - 1; i >= 3; i--) positions[i] = positions[i - 3];
+              positions.copyWithin(3, 0, positions.length - 3);
+              
               positions[0] = comet.mesh.position.x;
               positions[1] = comet.mesh.position.y;
               positions[2] = comet.mesh.position.z;
+              
               comet.tail.geometry.attributes.position.needsUpdate = true;
               if (comet.mesh.position.length() > 250) {
                   comet.active = false;
@@ -598,7 +807,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
     planetsRef.current.forEach(p => {
         gsap.to(p.mesh.scale, { x: 1, y: 1, z: 1, duration: 0.5 });
         if (p.mesh instanceof THREE.Mesh && p.mesh.material instanceof THREE.MeshStandardMaterial) {
-            gsap.to(p.mesh.material, { emissiveIntensity: 0, duration: 0.5 });
+            gsap.to(p.mesh.material, { emissiveIntensity: p.data.id === 'sun' ? 1.0 : 0, duration: 0.5 });
         } else if (p.mesh.type === 'Group') {
             const planetMesh = p.mesh.children[0] as THREE.Mesh;
             if (planetMesh.material instanceof THREE.MeshStandardMaterial) {
@@ -607,7 +816,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         }
         if (p.orbitLine) {
             const mat = p.orbitLine.material as THREE.LineDashedMaterial;
-            gsap.to(mat, { opacity: 0.15, duration: 0.5 });
+            gsap.to(mat, { opacity: 0.25, duration: 0.5 });
             mat.color.setHex(0xffffff);
         }
     });
@@ -647,9 +856,9 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
             const mat = targetPlanet.orbitLine.material as THREE.LineDashedMaterial;
             mat.color.setHex(0x60a5fa);
             gsap.fromTo(mat, 
-                { opacity: 0.15 },
+                { opacity: 0.25 },
                 { opacity: 0.8, duration: 0.6, yoyo: true, repeat: 3, ease: "sine.inOut",
-                  onComplete: () => { gsap.to(mat, { opacity: 0.3, duration: 0.5 }); }
+                  onComplete: () => { gsap.to(mat, { opacity: 0.4, duration: 0.5 }); }
                 }
             );
         }
@@ -697,7 +906,7 @@ const SolarSystem: React.FC<SolarSystemProps> = ({ onPlanetSelect, selectedPlane
         {PLANETS.map(p => (
             <div 
                 key={p.id} 
-                ref={el => labelRefs.current[p.id] = el}
+                ref={(el) => { labelRefs.current[p.id] = el; }}
                 className="absolute text-white text-[10px] md:text-xs font-bold pointer-events-none transition-opacity duration-300 uppercase tracking-widest"
                 style={{ 
                     opacity: 0, 
@@ -732,7 +941,7 @@ function createOrbit(radius: number, scene: THREE.Scene): THREE.Line | undefined
       scale: 1,
       dashSize: 3,
       gapSize: 2,
-      opacity: 0.15,
+      opacity: 0.3, // Increased opacity for better gravimetric visualization
       transparent: true
     });
     const orbit = new THREE.Line(geometry, material);
